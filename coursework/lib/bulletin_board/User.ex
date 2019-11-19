@@ -1,9 +1,10 @@
 defmodule User do
   import TopicManager
 
-#  def init_state(user_name) do
+#  def init_state(user_name, other_nodes) do
 #    %{
 #      name: user_name,
+#      nodes: other_nodes
 #    }
 #  end
 
@@ -25,14 +26,14 @@ defmodule User do
     end
   end
   
-  def subscribe(topic_name, user_name) do
+  def subscribe(user_name, topic_name) do
     case :global.whereis_name(topic_name) do
       pid -> send(pid, {:subscribe, user_name})
       :undefined -> TopicManager.start(topic_name, user_name, :master)
     end
   end
 
-  def unsubscribe(topic_name, user_name) do
+  def unsubscribe(user_name, topic_name) do
   end
 
   def post(user_name, topic_name, content) do
