@@ -29,7 +29,10 @@ defmodule User do
   def subscribe(user_name, topic_name) do
     case :global.whereis_name(topic_name) do
       pid -> send(pid, {:subscribe, user_name})
-      :undefined -> TopicManager.start(topic_name, user_name, :master)
+      :undefined ->
+        pid = TopicManager.start(topic_name, :master)
+        Process.sleep(1000)
+        send(pid, {:subscribe, user_name})
     end
   end
 

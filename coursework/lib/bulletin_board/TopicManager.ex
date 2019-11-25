@@ -4,10 +4,12 @@ defmodule TopicManager do
     %{
       topic_name: topic_name,
       subscribers: [],
-#      inbox: [],
       role: initial_role,
-      ballot: %{num: 1, pid: self()},
-      promises: []
+      ballot_num: 1,
+      accept_num: 1,
+      accept_val: [],
+      promises: [],
+      accepts: []
     }
   end
 
@@ -16,13 +18,13 @@ defmodule TopicManager do
   User will then be added to the newly created topic
   Topic manager can have a role of either :master or :replica
   '''
-  def start(topic_name, role, other_nodes) do
+  def start(topic_name, role) do
     pid = spawn(TopicManager, :run, [init_state(topic_name, role)])
     case role do
       :master -> :global.register_name("#{topic_name}_master", pid)
-      :replica -> 
+      :replica ->
         :global.register_name("#{topic_name}_replica", pid)
-        # monitor other nodes
+        # monitor other nodes or only master?
         for node <- Node.list do
           Node.monitor(node, true)
         end
@@ -44,14 +46,19 @@ defmodule TopicManager do
         for node <- Node.list do
           send(:global.whereis_name(node), {:prepare, self(), state.ballot})
         end
-      {:prepare, leader, ballot} ->
+      {:prepare, leader, ballot_num} ->
         # Phase 1: PREPARE acceptor
-        if ballot.num > state.ballot.num || ballot.num == state.ballot.num && ballot.pid > state.ballot.pid
-          accept_num = state.ballot.num
-          state = put_in(state, [:ballot], ballot)
-          send(leader, {:promise, ballot, accept_num, state.subscribers})
+        if ballot_num >= state.ballot_num
+          state = put_in(state, [:ballot_num], ballot_num)
+          send(leader, {:promise, ballot_num, state.accept_num, state.accept_val})
       {:promise, bal, accept_num, accept_val} ->
-
+        if bal == state.ballot_num do
+          state = propose(state, bal, accept_num, accept_val)
+        end
+      {:propose, b, v} ->
+        state = commit(state, b, v)
+      {:decide, v} ->
+        state = put_in(state, [:subscribers], v)
     end
     run(state)
   end
@@ -74,25 +81,37 @@ defmodule TopicManager do
    end
 
   # Paxos phase 2: PROPOSE leader
-  defp propose(state, {bal, accept_num, accept_val}) do
-    if length(state.promises) < length(Node.list) / 2 do
-      state = %{state | promises: [{bal, accept_num, accept_val} | state.promises]}
-    else
+  defp propose(state, bal, accept_num, accept_val) do
+    state = %{state | promises: [%{ballot: bal, acc_num: accept_num, acc_val: accept_val} | state.promises]}
+    if length(state.promises) > length(Node.list) / 2 do
       # if all vals == null, mvVal = initial_val
-      if Enum.map(state.promises, fn {bal, acc_num, acc_val} -> acc_val end) |> Enum.empty? do
+      if Enum.map(state.promises, fn p -> p.accept_val end) |> Enum.empty? do
         state = put_in(state, [:subscribers], state.subscribers)
       else
         my_val = hd(Enum.sort(state.promises, &(elem(&1, 0) > elem(&2, 0))))
-        state = put_in(state, [:subscribers], accept_val)
-        Enum.each(Node.list, fn n -> send(:global.whereis_name(n), {:propose, bal, accept_val}) end)
+        state = put_in(state, [:subscribers], my_val)
+        Enum.each(Node.list, fn n -> send(:global.whereis_name(n), {:propose, bal, my_val}) end)
+        state = put_in(state, [:promises], [])
       end
     end
   end
 
   # Paxos phase 2: COMMIT acceptor
   defp commit(state, b, v) do
-    if b > state.ballot.num do
+    if b >= state.ballot_num do
+      state.accept_num = b
+      state.accept_val = v
+      Enum.each(Node.list, fn n -> send(:global.whereis_name(n), {:accept, b, v}) end)
+    end
+    state
+  end
 
+  # Paxos - Deciding.
+  defp decide(state, b, v) do
+    state = %{state | accepts: [%{ballot: b, val: v} | state.accepts]}
+    if length(state.accepts) > length(Node.list) / 2 do
+      state = put_in(state, [:subscribers], v)
+      state = put_in(state, [:accepts], [])
     end
   end
 
