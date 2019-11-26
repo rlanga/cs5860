@@ -1,11 +1,11 @@
 defmodule TopicManager do
 
-  def init_state(topic_name, initial_role) do
+  def init_state(topic_name, initial_role, ballot_num) do
     %{
       topic_name: topic_name,
       subscribers: [],
       role: initial_role,
-      ballot_num: 1,
+      ballot_num: ballot_num,
       accept_num: 1,
       accept_val: [],
       promises: [],
@@ -19,15 +19,14 @@ defmodule TopicManager do
   Topic manager can have a role of either :master or :replica
   '''
   def start(topic_name, role) do
-    pid = spawn(TopicManager, :run, [init_state(topic_name, role)])
+    pid = spawn(TopicManager, :run, [init_state(topic_name, role, :rand.uniform(200))])
     case role do
-      :master -> :global.register_name("#{topic_name}_master", pid)
+      :master ->
+        :global.register_name(topic_name, pid)
+        Enum.each(Node.list, fn n -> send(:global.whereis_name(n), {:new_topic, topic_name}) end)
       :replica ->
-        :global.register_name("#{topic_name}_replica", pid)
-        # monitor other nodes or only master?
-        for node <- Node.list do
-          Node.monitor(node, true)
-        end
+        # monitor only master?
+        Node.monitor(topic_name, true)
     end
     pid
   end
@@ -38,9 +37,12 @@ defmodule TopicManager do
         state = add_subscriber(state, user_name)
       {:unsubscribe, user_name} ->
         state = remove_subscriber(state, user_name)
-      {:post, content} -> 1
+      {:publish, user, content} ->
+        for u <- List.delete(state.subscribers, user) do
+          send(:global.whereis_name(u), {:new_post, state.topic_name, content})
+        end
       {:nodedown, _} ->
-        # use Paxos algorithm to elect new leader
+        # use multi-Paxos algorithm to elect new leader
         # Phase 1: PREPARE leader
         state = update_in(state, [:ballot, :num], fn(b) -> b + 1 end)
         for node <- Node.list do
@@ -57,6 +59,7 @@ defmodule TopicManager do
         end
       {:propose, b, v} ->
         state = commit(state, b, v)
+      {:accept, b, v} -> 2
       {:decide, v} ->
         state = put_in(state, [:subscribers], v)
     end
@@ -84,6 +87,9 @@ defmodule TopicManager do
   defp propose(state, bal, accept_num, accept_val) do
     state = %{state | promises: [%{ballot: bal, acc_num: accept_num, acc_val: accept_val} | state.promises]}
     if length(state.promises) > length(Node.list) / 2 do
+      state = put_in(state, [:role], :master)
+      :global.register_name(state.topic_name, self())
+      IO.puts("node is now master topic manager")
       # if all vals == null, mvVal = initial_val
       if Enum.map(state.promises, fn p -> p.accept_val end) |> Enum.empty? do
         state = put_in(state, [:subscribers], state.subscribers)
