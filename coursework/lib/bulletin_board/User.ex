@@ -1,5 +1,5 @@
 defmodule User do
-  import TopicManager
+#  import TopicManager, only: [start: 2]
 
   def init_state(parent_id) do
     %{
@@ -20,11 +20,10 @@ defmodule User do
 
   def run(state) do
     receive do
-      # This creates a 'replica' topic manager process on nodes other than master topic manager
-      {:new_topic, topic_name} -> TopicManager.start(topic_name, :replica)
-      {:new_post, topic, content} ->
+      {:new_post, topic, sender, content} ->
 #        state = %{state | inbox: state.inbox ++ [%{topic: topic, content: content}]}
-        send(state.parent_id, {:inbox, topic, content})
+        send(state.parent_id, {:inbox, topic, sender, content})
+        IO.puts("New content received! Check inbox")
       {:shutdown} -> exit(:normal)
     end
     run(state)
@@ -32,11 +31,11 @@ defmodule User do
   
   def subscribe(user_name, topic_name) do
     case :global.whereis_name(topic_name) do
-      pid -> send(pid, {:subscribe, user_name})
       :undefined ->
-        pid = TopicManager.start(topic_name, :master)
+        TopicManager.start(topic_name, :master)
         Process.sleep(1000)
-        send(pid, {:subscribe, user_name})
+        send(:global.whereis_name(topic_name), {:subscribe, user_name})
+      pid -> send(pid, {:subscribe, user_name})
     end
   end
 
@@ -50,9 +49,11 @@ defmodule User do
 
   def fetch_news() do
     receive do
-      {:inbox, topic, content} ->
-        IO.puts("#{topic}: #{content}")  # sso-fifo
+      {:inbox, topic, sender, content} ->
+        IO.puts("#{topic} | #{sender}: #{content}")  # sso-fifo
         fetch_news()
+    after
+      1000 -> IO.puts("No news to report. Check back later :)")
     end
   end
 end
