@@ -35,12 +35,16 @@ defmodule User do
         TopicManager.start(topic_name, :master)
         Process.sleep(1000)
         send(:global.whereis_name(topic_name), {:subscribe, user_name})
-      pid -> send(pid, {:subscribe, user_name})
+        {:ok, "#{user_name} subscribed to #{topic_name}"}
+      pid ->
+        send(pid, {:subscribe, user_name})
+        {:ok, "#{user_name} subscribed to #{topic_name}"}
     end
   end
 
   def unsubscribe(user_name, topic_name) do
     send(:global.whereis_name(topic_name), {:unsubscribe, user_name})
+    {:ok, "#{user_name} unsubscribed from #{topic_name}"}
   end
 
   def post(user_name, topic_name, content) do
