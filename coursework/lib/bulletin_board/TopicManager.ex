@@ -50,12 +50,13 @@ defmodule TopicManager do
           remove_subscriber(state, user_name)
         {:publish, user, content} ->
           send(:global.whereis_name("mon"), {Node.self(), "Publishing new content for #{state.topic_name}"})
+          state = put_in(state, [:subscribers], Enum.filter(state.subscribers, fn s -> :global.whereis_name(s) != :undefined end))
           for u <- List.delete(state.subscribers, user) do
             send(:global.whereis_name(u), {:new_post, state.topic_name, user, content})
           end
           state
         {:DOWN, _, :process, _, _} ->
-          send(:global.whereis_name("mon"), {Node.self(), "Topic master down. Begin leader selection"})
+          send(:global.whereis_name("mon"), {Node.self(), "Topic master down. Begin leader selection. Ballot: #{state.ballot_num}"})
           if length(Node.list) == 0 do
             send(:global.whereis_name("mon"), {Node.self(), "Last one standing, becoming leader!"})
             :global.unregister_name("#{state.topic_name}_replica_#{Node.self()}")
@@ -80,7 +81,7 @@ defmodule TopicManager do
             state
           end
         {:promise, bal, accept_num, accept_val} ->
-          send(:global.whereis_name("mon"), {self(), "PROPOSE: #{accept_val} #{accept_val}"})
+          send(:global.whereis_name("mon"), {self(), "PROPOSE: #{accept_num} #{accept_val}"})
           if bal == state.ballot_num do
             propose(state, bal, accept_num, accept_val)
           else
@@ -99,11 +100,21 @@ defmodule TopicManager do
   Subscribes the new user to all the replicas and the master node
   '''
   defp add_subscriber(state, user) do
-    state = update_in(state, [:subscribers], fn(subs) -> [user | subs] end)
-    for replica <- Node.list do
-      send(:global.whereis_name("#{state.topic_name}_replica_#{replica}"), {:propose, state.ballot_num, state.subscribers})
+    if Enum.member?(state.subscribers, user) == false do
+      state = update_in(state, [:subscribers], fn(subs) -> [user | subs] end)
+      for replica <- Node.list do
+        rid = :global.whereis_name("#{state.topic_name}_replica_#{replica}")
+        case rid do
+          :undefined ->
+            Node.spawn(replica, TopicManager, :start, [state.topic_name, :replica])
+            send(:global.whereis_name("#{state.topic_name}_replica_#{replica}"), {:propose, state.ballot_num, state.subscribers})
+          r -> send(r, {:propose, state.ballot_num, state.subscribers})
+        end
+      end
+      state
+    else
+      state
     end
-    state
   end
 
    defp remove_subscriber(state, user) do
@@ -116,18 +127,19 @@ defmodule TopicManager do
 
   # Paxos phase 2: PROPOSE leader
   defp propose(state, bal, accept_num, accept_val) do
-    state = %{state | promises: [%{ballot: bal, acc_num: accept_num, acc_val: accept_val} | state.promises]}
+    state = %{state | promises: [%{ballot: bal, accept_num: accept_num, accept_val: accept_val} | state.promises]}
     if length(state.promises) > length(Node.list) / 2 do
       state = put_in(state, [:role], :master)
+      :global.unregister_name("#{state.topic_name}_replica_#{Node.self()}")
       :global.register_name(state.topic_name, self())
       send(:global.whereis_name("mon"), {Node.self(), "node is now master topic manager"})
       # if all vals == null, mvVal = initial_val
       if Enum.map(state.promises, fn p -> p.accept_val end) |> Enum.empty? do
         put_in(state, [:subscribers], state.subscribers)
       else
-        my_val = hd(Enum.sort(state.promises, &(elem(&1, 0) > elem(&2, 0))))
-        state = put_in(state, [:subscribers], my_val)
-        Enum.each(Node.list, fn r -> send(:global.whereis_name("#{state.topic_name}_replica_#{r}"), {:propose, bal, my_val}) end)
+        prom = hd(Enum.sort(state.promises, fn x, y -> x.ballot > y.ballot end))
+        state = put_in(state, [:subscribers], prom.accept_val)
+        Enum.each(Node.list, fn r -> send(:global.whereis_name("#{state.topic_name}_replica_#{r}"), {:propose, bal, prom.accept_val}) end)
         put_in(state, [:promises], [])
       end
     else
@@ -152,6 +164,7 @@ defmodule TopicManager do
     if length(state.accepts) > length(Node.list) / 2 do
       put_in(state, [:subscribers], v) |> put_in([:accepts], [])
     end
+    state
   end
 
   defp send_to_all(state, msg) do

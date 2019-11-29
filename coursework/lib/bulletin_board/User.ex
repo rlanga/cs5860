@@ -33,7 +33,7 @@ defmodule User do
     case :global.whereis_name(topic_name) do
       :undefined ->
         TopicManager.start(topic_name, :master)
-        Process.sleep(1000)
+        Process.sleep(500)
         send(:global.whereis_name(topic_name), {:subscribe, user_name})
         {:ok, "#{user_name} subscribed to #{topic_name}"}
       pid ->
@@ -57,7 +57,7 @@ defmodule User do
         IO.puts("#{topic} | #{sender}: #{content}")  # sso-fifo
         fetch_news()
     after
-      1000 -> IO.puts("No news to report. Check back later :)")
+      500 -> IO.puts("~~ No more news to report. Check back later :) ~~")
     end
   end
 end
