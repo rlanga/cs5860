@@ -51,7 +51,7 @@ defmodule TopicManager do
         {:publish, user, content} ->
           send(:global.whereis_name("mon"), {Node.self(), "Publishing new content for #{state.topic_name}"})
           state = put_in(state, [:subscribers], Enum.filter(state.subscribers, fn s -> :global.whereis_name(s) != :undefined end))
-          for u <- List.delete(state.subscribers, user) do
+          for u <- state.subscribers do
             send(:global.whereis_name(u), {:new_post, state.topic_name, user, content})
           end
           state
