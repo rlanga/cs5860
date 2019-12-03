@@ -3,7 +3,6 @@ defmodule User do
 
   def init_state(parent_id) do
     %{
-#      inbox: [],
       parent_id: parent_id
     }
   end
@@ -21,7 +20,6 @@ defmodule User do
   def run(state) do
     receive do
       {:new_post, topic, sender, content} ->
-#        state = %{state | inbox: state.inbox ++ [%{topic: topic, content: content}]}
         send(state.parent_id, {:inbox, topic, sender, content})
         IO.puts("New content received! Check inbox")
       {:shutdown} -> exit(:normal)

@@ -32,9 +32,6 @@ defmodule TopicManager do
   end
 
   def run(state) do
-#    if state.role == :replica and :global.whereis_name("#{state.topic_name}_replica_#{Node.self()}") == :undefined do
-#      :global.register_name("#{state.topic_name}_replica_#{Node.self()}", self())
-#    end
     state = receive do
         {:monitor_master} ->
           Process.monitor(:global.whereis_name(state.topic_name))
@@ -43,22 +40,22 @@ defmodule TopicManager do
           :global.register_name("#{state.topic_name}_replica_#{Node.self()}", self())
           state
         {:subscribe, user_name} ->
-          send(:global.whereis_name("mon"), {Node.self(), "#{user_name} subscribed to #{state.topic_name}"})
+          # send(:global.whereis_name("mon"), {Node.self(), "#{user_name} subscribed to #{state.topic_name}"})
           add_subscriber(state, user_name)
         {:unsubscribe, user_name} ->
-          send(:global.whereis_name("mon"), {Node.self(), "#{user_name} unsubscribed from #{state.topic_name}"})
+          # send(:global.whereis_name("mon"), {Node.self(), "#{user_name} unsubscribed from #{state.topic_name}"})
           remove_subscriber(state, user_name)
         {:publish, user, content} ->
-          send(:global.whereis_name("mon"), {Node.self(), "Publishing new content for #{state.topic_name}"})
+          # send(:global.whereis_name("mon"), {Node.self(), "Publishing new content for #{state.topic_name}"})
           state = put_in(state, [:subscribers], Enum.filter(state.subscribers, fn s -> :global.whereis_name(s) != :undefined end))
           for u <- state.subscribers do
             send(:global.whereis_name(u), {:new_post, state.topic_name, user, content})
           end
           state
         {:DOWN, _, :process, _, _} ->
-          send(:global.whereis_name("mon"), {Node.self(), "Topic master down. Begin leader selection. Ballot: #{state.ballot_num}"})
+          # send(:global.whereis_name("mon"), {Node.self(), "Topic master down. Begin leader selection. Ballot: #{state.ballot_num}"})
           if length(Node.list) == 0 do
-            send(:global.whereis_name("mon"), {Node.self(), "Last one standing, becoming leader!"})
+            # send(:global.whereis_name("mon"), {Node.self(), "Last one standing, becoming leader!"})
             :global.unregister_name("#{state.topic_name}_replica_#{Node.self()}")
             :global.register_name(state.topic_name, self())
             put_in(state, [:role], :master)
@@ -72,7 +69,7 @@ defmodule TopicManager do
             state
           end
         {:prepare, leader, ballot_num} ->
-          send(:global.whereis_name("mon"), {Node.self(), "PREPARE"})
+          # send(:global.whereis_name("mon"), {Node.self(), "PREPARE"})
           # Phase 1: PREPARE acceptor
           if ballot_num >= state.ballot_num do
             send(leader, {:promise, ballot_num, state.accept_num, state.accept_val})
@@ -81,14 +78,14 @@ defmodule TopicManager do
             state
           end
         {:promise, bal, accept_num, accept_val} ->
-          send(:global.whereis_name("mon"), {self(), "PROPOSE: #{accept_num} #{accept_val}"})
+          # send(:global.whereis_name("mon"), {self(), "PROPOSE: #{accept_num} #{accept_val}"})
           if bal == state.ballot_num do
             propose(state, bal, accept_num, accept_val)
           else
             state
           end
         {:propose, b, v} ->
-          send(:global.whereis_name("mon"), {self(), "COMMIT #{b} #{v}"})
+          # send(:global.whereis_name("mon"), {self(), "COMMIT #{b} #{v}"})
           commit(state, b, v)
         {:accept, b, v} -> decide(state, b, v)
         {:decide, v} -> put_in(state, [:subscribers], v)
@@ -96,9 +93,8 @@ defmodule TopicManager do
     run(state)
   end
 
-  '''
-  Subscribes the new user to all the replicas and the master node
-  '''
+  
+  # Subscribes the new user to all the replicas and the master node
   defp add_subscriber(state, user) do
     if Enum.member?(state.subscribers, user) == false do
       state = update_in(state, [:subscribers], fn(subs) -> [user | subs] end)
@@ -117,6 +113,7 @@ defmodule TopicManager do
     end
   end
 
+  # Removes a user from the subscriber list and sends PROPOSE instruction to update replica states  
    defp remove_subscriber(state, user) do
     state = update_in(state, [:subscribers], fn(subs) -> subs -- user end)
     for replica <- Node.list do
@@ -125,14 +122,18 @@ defmodule TopicManager do
     state
    end
 
-  # Paxos phase 2: PROPOSE leader
+  '''
+   Paxos phase 2: PROPOSE leader.
+   This processes a PROMISE message if it's ballot number is equal to state.ballot_num.
+   N.B: the ballot check is done in the run 'receive' function.
+  '''
   defp propose(state, bal, accept_num, accept_val) do
     state = %{state | promises: [%{ballot: bal, accept_num: accept_num, accept_val: accept_val} | state.promises]}
     if length(state.promises) > length(Node.list) / 2 do
       state = put_in(state, [:role], :master)
       :global.unregister_name("#{state.topic_name}_replica_#{Node.self()}")
       :global.register_name(state.topic_name, self())
-      send(:global.whereis_name("mon"), {Node.self(), "node is now master topic manager"})
+      # send(:global.whereis_name("mon"), {Node.self(), "node is now master topic manager"})
       # if all vals == null, mvVal = initial_val
       if Enum.map(state.promises, fn p -> p.accept_val end) |> Enum.empty? do
         put_in(state, [:subscribers], state.subscribers)
@@ -147,7 +148,7 @@ defmodule TopicManager do
     end
   end
 
-  # Paxos phase 2: COMMIT acceptor
+  # Paxos phase 2: COMMIT acceptor. This is run when a PROPOSE message is received.
   defp commit(state, b, v) do
     if b >= state.ballot_num do
       state = put_in(state, [:accept_num], b) |> put_in([:accept_val], v)

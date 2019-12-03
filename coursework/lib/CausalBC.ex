@@ -13,11 +13,8 @@ defmodule CausalBC do
       vt: %{}
     }
   end
-  # for p <- participants, into: %{}, do: {p, 0}
 
-  # how to create a new participant map
   def start(name, participants) do
-#    Enum.map(participants, fn p ->  end)
     in_state = update_in(init_state(name, participants), [:vt], fn v -> for p <- participants, into: v, do: {p, 0} end)
     pid = spawn(CausalBC, :run, [in_state])
     send(pid, {:register_globally})
@@ -28,7 +25,7 @@ defmodule CausalBC do
   end
 
   def co_bc_recv(msg, upper_layer, origin) do
-    send(upper_layer, {:output, :bc_receive, origin, msg})
+    send(upper_layer, {:bc_rcvd, msg, origin})
   end
 
   def run(state) do
@@ -44,8 +41,8 @@ defmodule CausalBC do
         bc_send(state, {:bc_msg, msg, state.vt, state.name})
       {:bc_msg, msg, vt, origin_name} ->
         bc_recv(state, msg, vt, origin_name)
-      {:output, :bc_receive, origin_name, msg} ->
-        IO.puts("OUTPUT: #{state.name} CO-BCAST-delivered broadcast msg #{msg} from #{origin_name}\n")
+      {:bc_rcvd, msg, origin} ->
+        IO.puts("OUTPUT: #{state.name} CO-BCAST-delivered broadcast msg #{msg} from #{origin}\n")
         Process.sleep(1000)
         state
     end
@@ -80,8 +77,10 @@ defmodule CausalBC do
     )
   end
 
-  # Gets messages to remove from 'pending' that satisfy the 3 conditions of co_bc_recv.
-  # Attempts have been made Tail-recursive optimise it
+  @doc """
+  Gets messages to remove from 'pending' that satisfy the 3 conditions of co_bc_recv.
+  Attempts have been made Tail-recursive optimise it
+  """
   def remove_pending(state, pending, acc \\ [])
   def remove_pending(state, [], acc) do
     if Enum.empty?(acc) do
@@ -93,19 +92,9 @@ defmodule CausalBC do
     end
   end
   def remove_pending(state, [pend | rest], acc) do
-    # condition 1: message is in pending. This is passed as function input
-  #      checks = for p <- state.participants do
-  #        # condition 2: w[j] == vt[j] + 1
-  #        case p do
-  #          p when p == pend.origin ->
-  #            v == state.vt[p] + 1
-  #          # condition 3: w[k] ≤ vt[k] for all k ≠ j
-  #          p when p != pend.origin ->
-  #            v <= state.vt[p]
-  #        end
-  #      end
-
     parts_except_j = List.delete(state.participants, pend.origin)
+    
+    # w[k] ≤ vt[k] for all k ≠ j
     condition3 =  length(Enum.filter(parts_except_j, fn k -> pend.vt[k] <= state.vt[k] end)) == length(parts_except_j)
 
     if pend.vt[pend.origin] == state.vt[pend.origin] + 1 and condition3 do
@@ -120,17 +109,17 @@ defmodule CausalBC do
   end
 end
 
-CausalBC.start("p1", ["p1","p2","p3","p4"])
-CausalBC.start("p2", ["p1","p2","p3","p4"])
-CausalBC.start("p3", ["p1","p2","p3","p4"])
-CausalBC.start("p4", ["p1","p2","p3","p4"])
+# CausalBC.start("p1", ["p1","p2","p3","p4"])
+# CausalBC.start("p2", ["p1","p2","p3","p4"])
+# CausalBC.start("p3", ["p1","p2","p3","p4"])
+# CausalBC.start("p4", ["p1","p2","p3","p4"])
 
-Process.sleep(500)
+# Process.sleep(500)
 
-CausalBC.co_bc_send("Hi", "p2")
-Process.sleep(50)
-CausalBC.co_bc_send("How are you?", "p2")
-Process.sleep(50)
-CausalBC.co_bc_send("I'm goog myself", "p2")
-Process.sleep(50)
-CausalBC.co_bc_send("Hi p1!", "p1")
+# CausalBC.co_bc_send("Hi", "p2")
+# Process.sleep(50)
+# CausalBC.co_bc_send("How are you?", "p2")
+# Process.sleep(50)
+# CausalBC.co_bc_send("I'm good myself", "p2")
+# Process.sleep(50)
+# CausalBC.co_bc_send("Hi p1!", "p1")
